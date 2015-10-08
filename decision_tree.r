@@ -15,6 +15,7 @@ minLeafSize <- 1000
 minEntropy <- 0.001
 classAttr <- 15
 classLabel1 <- unlist(attrVals[[classAttr]][1])
+classLabel2 <- unlist(attrVals[[classAttr]][2])
 sensitiveAttr <- 10
 sensitiveAttrVal1 <- unlist(attrVals[[sensitiveAttr]][2])
 
@@ -138,46 +139,60 @@ generateTree <- function(x, totalNumSensitive1, totalNumSensitive2, level) {
     if (nrow(x) <= minLeafSize || nodeEntropy(x, level) < minEntropy) {
         return (createLeaf(x, totalNumSensitive1, totalNumSensitive2, level))
     } else {
-        subsets <- split(x, level)
+        node <- split(x, level)
         nodes <- list()
         i <- 1
-        for (subnode in subsets$subnodes) {
+        for (subnode in node$subnodes) {
             nodes <- append(nodes, list(generateTree(subnode, totalNumSensitive1, totalNumSensitive2, paste0(level, ".", i))))
             i <- i + 1
         }
-        return (list(attr=subsets$attr, splitParams=subsets$splitParams, subnodes=nodes))
+        return (list(attr=node$attr, splitParams=node$splitParams, subnodes=nodes))
     }
 }
 
-sortLeaves <- function(tree, sortedLeaves) {
+# Relabel one random leaf in tree which has dDisc negative
+relabelLeaf <- function(tree) {
     if (is.null(tree$attr)) { # leaf node
-        if (length(sortedLeaves) == 0) {
-            return (list(tree))
-        } else {
-            for (i in 1:length(sortedLeaves)) {
-                print(sortedLeaves[i]$dAcc)
-                if (tree$dAcc < sortedLeaves[[i]]$dAcc) {
-                    return (c(sortedLeaves[1:(i-1)], tree, sortedLeaves[i:length(sortedLeaves)]))
-                    break;
-                }
+        if (tree$dDisc < 0) {
+            classLabel <- classLabel1
+            if (tree$class == classLabel) {
+                classLabel = classLabel2
             }
+            return (list(class=classLabel, dAcc=tree$dAcc, dDisc=-tree$dDisc))
+        } else {
+            # do nothing as the discrimination would increase
+            return (list(class=classLabel, dAcc=0, dDisc=0))
         }
     } else {
-        for (subNode in tree$subnodes) {
-            sortedLeaves <- sortLeaves(subNode, sortedLeaves)
+        path <- sample(1:length(tree$subnodes), 1)
+        #print(sprintf("Using attribute %d and path %d", tree$attr, path))
+        newSubNode <- relabelLeaf(tree$subnodes[[path]])
+        if (path == 1) {
+            return (list(attr=tree$attr, splitParams=tree$splitParams, dAcc=newSubNode$dDacc, dDisc=newSubNode$dDisc, subnodes=c(list(newSubNode), tree$subnodes[(path + 1):length(tree$subnodes)])))
+        } else if (path == length(tree$subnodes)) {
+            return (list(attr=tree$attr, splitParams=tree$splitParams, dAcc=newSubNode$dDacc, dDisc=newSubNode$dDisc, subnodes=c(tree$subnodes[1:(path-1)], list(newSubNode))))
+        } else {
+            return (list(attr=tree$attr, splitParams=tree$splitParams, dAcc=newSubNode$dDacc, dDisc=newSubNode$dDisc, subnodes=c(tree$subnodes[1:(path-1)], list(newSubNode), tree$subnodes[(path + 1):length(tree$subnodes)])))
         }
     }
-    return (sortedLeaves)
 }
 
-relabel <- function(tree) {
-    if (is.null(tree$attr)) { # leaf node
-        return (tree$class)
-    } else {
-        for (subNode in tree$subnodes) {
-            relabel(subNode)
-        }
+# We use an approach similar to Monte-Carlo method
+# and just generate random new trees with relabeled leaves
+# and discrimination drop more than specified value
+relabel <- function(tree, discDrop) {
+    dAcc <- 0
+    dDisc <- 0
+    numLeaves <- 0
+    newTree <- tree
+    while (dDisc < discDrop) {
+        newTree <- relabelLeaf(newTree)
+        dAcc <- dAcc + newTree$dDisc
+        dDisc <- dDisc + newTree$dDisc
+        numLeaves <- numLeaves + 1
     }
+    print(paste("Number of leaves relabeled:", numLeaves, ", dAcc:", dAcc))
+    return (newTree)
 }
 
 predict <- function(x, tree) {
@@ -194,6 +209,10 @@ chunkSize <- ceiling(nrow(data) / 10)
 meanAcc <- 0
 meanDisc1 <- 0
 meanDisc2 <- 0
+meanAccRelab <- 0
+meanDisc1Relab <- 0
+meanDisc2Relab <- 0
+dDisc = 0.1
 for (i in 0:9) { # 10-fold cross validation
     print(paste("Building tree", i + 1))
     validation <- data[(i*chunkSize + 1):(min((i+1)*chunkSize,nrow(data))),] # 10% of data for validation
@@ -208,39 +227,59 @@ for (i in 0:9) { # 10-fold cross validation
     numSensitive1 <- nrow(train[train[,sensitiveAttr] == unlist(sensitiveAttrVal1),])
     numSensitive2 <- nrow(train) -  numSensitive1
     tree <- generateTree(train, numSensitive1, numSensitive2, "1")
+    print("Relabeling tree")
+    treeRelab <- relabel(tree, dDisc)
     acc <- 0
     disc1 <- 0
     disc2 <- 0
-    sortedLeaves <- sortLeaves(tree, list())
-    print(sortedLeaves)
-    break;
+    accRelab <- 0
+    disc1Relab <- 0
+    disc2Relab <- 0
     print(paste("Validating tree", i + 1))
     for (j in 1:nrow(validation)) {
         x <- validation[j,]
-        label <- predict(x, tree)
+        class <- predict(x, tree)
+        classRelab <- predict(x, treeRelab)
         #print(sprintf("Prediction: %s, true label: %s", format(label), format(x[classAttr])))
-        if (label == unlist(x[classAttr])) {
+        if (class == unlist(x[classAttr])) {
             acc <- acc + 1
         }
-        if (label == classLabel1) {
+        if (class == classLabel1) {
             if (unlist(x[sensitiveAttr]) == sensitiveAttrVal1) {
                 disc1 <- disc1 + 1
             } else {
                 disc2 <- disc2 + 1
             }
         }
+        if (classRelab == unlist(x[classAttr])) {
+            accRelab <- accRelab + 1
+        }
+        if (classRelab == classLabel1) {
+            if (unlist(x[sensitiveAttr]) == sensitiveAttrVal1) {
+                disc1Relab <- disc1Relab + 1
+            } else {
+                disc2Relab <- disc2Relab + 1
+            }
+        }
     }
-    print(paste("Accuracy:", acc / nrow(validation)))
     numSensitive1 <- nrow(validation[validation[,sensitiveAttr] == sensitiveAttrVal1,])
     numSensitive2 <- nrow(validation) -  numSensitive1
+    print(paste("Accuracy:", acc / nrow(validation)))
+    print(paste("Accuracy after relabeling:", accRelab / nrow(validation)))
     print(paste("Discrimination:", disc1 / numSensitive1 - disc2 / numSensitive2))
+    print(paste("Discrimination relabeling:", disc1Relab / numSensitive1 - disc2Relab / numSensitive2))
     meanAcc <- meanAcc + acc
     meanDisc1 <- meanDisc1 + disc1
     meanDisc2 <- meanDisc2 + disc2
+    meanAccRelab <- meanAccRelab + accRelab
+    meanDisc1Relab <- meanDisc1Relab + disc1Relab
+    meanDisc2Relab <- meanDisc2Relab + disc2Relab
 }
-print(paste("10-Fold cross validation accuracy:", meanAcc / nrow(data)))
 numSensitive1 <- nrow(data[data[,sensitiveAttr] == unlist(sensitiveAttrVal1),])
 numSensitive2 <- nrow(data) -  numSensitive1
+print(paste("10-Fold cross validation accuracy:", meanAcc / nrow(data)))
+print(paste("10-Fold cross validation accuracy after relabeling:", meanAccRelab / nrow(data)))
 print(paste("10-Fold cross validation discrimination:", meanDisc1 / numSensitive1 - meanDisc2 / numSensitive2))
+print(paste("10-Fold cross validation discrimination after relabeling:", meanDisc1Relab / numSensitive1 - meanDisc2Relab / numSensitive2))
 
 
