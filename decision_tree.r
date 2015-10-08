@@ -1,5 +1,5 @@
 library(class)
-library(stringi)
+#library(stringi)
 
 attributes <- c("age", "workclass", "fnlwgt", "education", "education-num", "marital-status", "occupation", "relationship", "race", "sex", "capital-gain", "capital-loss", "hours-per-week", "native-country")
 attrTypes <- c(0, 1, 0, 1, 0, 1, 1, 1, 1, 1, 0, 0, 0, 1) # 0 - continuous, 1 - discrete
@@ -17,7 +17,7 @@ classAttr <- 15
 classLabel1 <- unlist(attrVals[[classAttr]][1])
 classLabel2 <- unlist(attrVals[[classAttr]][2])
 sensitiveAttr <- 10
-sensitiveAttrVal1 <- unlist(attrVals[[sensitiveAttr]][2])
+sensitiveAttrVal1 <- unlist(attrVals[[sensitiveAttr]][1])
 
 nodeEntropy <- function(x, level) {
     entropy <- 0
@@ -156,23 +156,23 @@ relabelLeaf <- function(tree) {
         if (tree$dDisc < 0) {
             classLabel <- classLabel1
             if (tree$class == classLabel) {
-                classLabel = classLabel2
+                classLabel <- classLabel2
             }
             return (list(class=classLabel, dAcc=tree$dAcc, dDisc=-tree$dDisc))
         } else {
             # do nothing as the discrimination would increase
-            return (list(class=classLabel, dAcc=0, dDisc=0))
+            return (list(class=tree$class, dAcc=0, dDisc=0))
         }
     } else {
         path <- sample(1:length(tree$subnodes), 1)
         #print(sprintf("Using attribute %d and path %d", tree$attr, path))
         newSubNode <- relabelLeaf(tree$subnodes[[path]])
         if (path == 1) {
-            return (list(attr=tree$attr, splitParams=tree$splitParams, dAcc=newSubNode$dDacc, dDisc=newSubNode$dDisc, subnodes=c(list(newSubNode), tree$subnodes[(path + 1):length(tree$subnodes)])))
+            return (list(attr=tree$attr, splitParams=tree$splitParams, dAcc=newSubNode$dAcc, dDisc=newSubNode$dDisc, subnodes=c(list(newSubNode), tree$subnodes[(path + 1):length(tree$subnodes)])))
         } else if (path == length(tree$subnodes)) {
-            return (list(attr=tree$attr, splitParams=tree$splitParams, dAcc=newSubNode$dDacc, dDisc=newSubNode$dDisc, subnodes=c(tree$subnodes[1:(path-1)], list(newSubNode))))
+            return (list(attr=tree$attr, splitParams=tree$splitParams, dAcc=newSubNode$dAcc, dDisc=newSubNode$dDisc, subnodes=c(tree$subnodes[1:(path-1)], list(newSubNode))))
         } else {
-            return (list(attr=tree$attr, splitParams=tree$splitParams, dAcc=newSubNode$dDacc, dDisc=newSubNode$dDisc, subnodes=c(tree$subnodes[1:(path-1)], list(newSubNode), tree$subnodes[(path + 1):length(tree$subnodes)])))
+            return (list(attr=tree$attr, splitParams=tree$splitParams, dAcc=newSubNode$dAcc, dDisc=newSubNode$dDisc, subnodes=c(tree$subnodes[1:(path-1)], list(newSubNode), tree$subnodes[(path + 1):length(tree$subnodes)])))
         }
     }
 }
@@ -187,7 +187,7 @@ relabel <- function(tree, discDrop) {
     newTree <- tree
     while (dDisc < discDrop) {
         newTree <- relabelLeaf(newTree)
-        dAcc <- dAcc + newTree$dDisc
+        dAcc <- dAcc + newTree$dAcc
         dDisc <- dDisc + newTree$dDisc
         numLeaves <- numLeaves + 1
     }
@@ -251,6 +251,7 @@ for (i in 0:9) { # 10-fold cross validation
                 disc2 <- disc2 + 1
             }
         }
+		#print(paste("classRelab:", classRelab))
         if (classRelab == unlist(x[classAttr])) {
             accRelab <- accRelab + 1
         }
@@ -267,7 +268,7 @@ for (i in 0:9) { # 10-fold cross validation
     print(paste("Accuracy:", acc / nrow(validation)))
     print(paste("Accuracy after relabeling:", accRelab / nrow(validation)))
     print(paste("Discrimination:", disc1 / numSensitive1 - disc2 / numSensitive2))
-    print(paste("Discrimination relabeling:", disc1Relab / numSensitive1 - disc2Relab / numSensitive2))
+    print(paste("Discrimination after relabeling:", disc1Relab / numSensitive1 - disc2Relab / numSensitive2))
     meanAcc <- meanAcc + acc
     meanDisc1 <- meanDisc1 + disc1
     meanDisc2 <- meanDisc2 + disc2
