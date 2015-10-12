@@ -180,19 +180,31 @@ relabelLeaf <- function(tree) {
 # We use an approach similar to Monte-Carlo method
 # and just generate random new trees with relabeled leaves
 # and discrimination drop more than specified value
-relabel <- function(tree, discDrop) {
-    dAcc <- 0
-    dDisc <- 0
-    numLeaves <- 0
-    newTree <- tree
-    while (dDisc < discDrop) {
-        newTree <- relabelLeaf(newTree)
-        dAcc <- dAcc + newTree$dAcc
-        dDisc <- dDisc + newTree$dDisc
-        numLeaves <- numLeaves + 1
-    }
-    #print(paste("Number of leaves relabeled:", numLeaves, ", dAcc:", dAcc))
-    return (newTree)
+relabel <- function(tree, reqDDisc, initDDisc) {
+	newTree <- NULL
+	bestDAcc <- NULL
+	newDDisc <- NULL
+	# try 1000 times to achieve smaller drop in accuracy
+	for (i in 1:1000) {
+		numLeaves <- 0
+		tempTree <- tree
+		dAcc <- 0
+		dDisc <- initDDisc
+		while (dDisc < reqDDisc) {
+			tempTree <- relabelLeaf(tempTree)
+			dAcc <- dAcc + tempTree$dAcc
+	        dDisc <- dDisc + tempTree$dDisc
+	        numLeaves <- numLeaves + 1
+		}
+		if (is.null(bestDAcc) || dAcc > bestDAcc) {
+			#print(paste("Number of leaves relabeled:", numLeaves, ", dAcc:", dAcc))
+			newTree <- tempTree
+			bestDAcc <- dAcc
+			newDDisc <- dDisc
+		}
+	}
+	print(paste("dDisc", newDDisc))
+    return (list(tree=newTree, dDisc=newDDisc))
 }
 
 predict <- function(x, tree) {
@@ -303,20 +315,25 @@ for (i in 0:9) { # 10-fold cross validation
 	}
 	numSensitive1 <- nrow(validation[validation[,sensitiveAttr] == sensitiveAttrVal1,])
 	numSensitive2 <- nrow(validation) -  numSensitive1
+	# Accuracy and discrimination of the tree built using all the attributes
 	#acc <- baselineAccs[1]
 	disc <- baselineDiscs1[1] / numSensitive1 - baselineDiscs2[1] / numSensitive2
 	#print(paste("Accuracy:", acc / nrow(validation)))
 	#print(paste("Discrimination:", disc))
 	##################################
 	# Tree relabeling
-	dDiscs <- seq(abs(disc) / 10, abs(disc) - abs(disc) / 10, by = abs(disc) / 10)
+	reqDDiscs <- seq(abs(disc) / 10, abs(disc) - abs(disc) / 10, by = abs(disc) / 10)
 	relabAccs <- c()
 	relabDiscs1 <- c()
 	relabDiscs2 <- c()
-	for (dDisc in dDiscs) {
+	dDisc <- 0
+	treeRelab <- trees[[1]] # baseline tree built using all attributes
+	for (reqDDisc in reqDDiscs) {
 		# Building relabeled tree using given decrease in discrimination
-		print(paste("    Relabeling tree with dDisc", dDisc))
-		treeRelab <- relabel(trees[[1]], dDisc)
+		print(paste("    Relabeling tree with dDisc", reqDDisc))
+		relabResult <- relabel(treeRelab, reqDDisc, dDisc)
+		treeRelab <- relabResult$tree
+		dDisc <- relabResult$dDisc
 		accRelab <- 0
 		disc1Relab <- 0
 		disc2Relab <- 0
@@ -365,19 +382,21 @@ for (i in 0:9) { # 10-fold cross validation
 	}
 }
 numSensitive1 <- nrow(data[data[,sensitiveAttr] == unlist(sensitiveAttrVal1),])
-numSensitive2 <- nrow(data) -  numSensitive1
+numSensitive2 <- nrow(data) - numSensitive1
 
-baselineMeanAccs <- baselineMeanAccs / nrow(data)
-baselineMeanDiscs <- baselineMeanDiscs1 / numSensitive1 - baselineMeanDiscs2 / numSensitive2
+baselineMeanAccs <- baselineMeanAccs / nrow(data) * 100
+baselineMeanDiscs <- -(baselineMeanDiscs1 / numSensitive1 - baselineMeanDiscs2 / numSensitive2) * 100
 print(paste("10-Fold cross validation accuracy:", baselineMeanAccs))
 print(paste("10-Fold cross validation discrimination:", baselineMeanDiscs))
 
 
-relabMeanAccs <- relabMeanAccs / nrow(data)
-relabMeanDiscs <- relabMeanDiscs1 / numSensitive1 - relabMeanDiscs2 / numSensitive2
+relabMeanAccs <- relabMeanAccs / nrow(data) * 100
+relabMeanDiscs <- -(relabMeanDiscs1 / numSensitive1 - relabMeanDiscs2 / numSensitive2) * 100
 print(paste("10-Fold cross validation accuracy after relabeling:", relabMeanAccs))
 print(paste("10-Fold cross validation discrimination after relabeling:", relabMeanDiscs))
 
-postscript("results.ps")
-plot(-baselineMeanDiscs*100, baselineMeanAccs, xlab="Discrimination (%)", ylab="Accuracy (%)", type="o")
-lines(-relabMeanDiscs*100, relabMeanAccs*100)
+png("results.png")
+plot(baselineMeanDiscs, baselineMeanAccs, xlab="Discrimination (%)", ylab="Accuracy (%)", pch=3)
+lines(lowess(baselineMeanDiscs, baselineMeanAccs))
+points(relabMeanDiscs, relabMeanAccs, pch=5)
+lines(lowess(relabMeanDiscs, relabMeanAccs))
