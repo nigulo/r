@@ -207,29 +207,37 @@ predict <- function(x, tree) {
 
 # Creating baseline datasets with the most correlated attributes removed
 corrs <- c()
+sensitiveCol <- as.integer(data[,sensitiveAttr])
 for (i in 1:ncol(data)) {
 	if (i == sensitiveAttr || i == classAttr) {
 		next;
 	}
-	corrs <- c(corrs, list(attr=i, corr=abs(correlation(data[,i], data[,sensitiveAttr]))))
+	x <- data[,i]
+	if (attrTypes[i]) {
+		x <- as.integer(x)
+	}
+	corrs <- c(corrs, list(list(attr=i, corr=abs(cor(x, sensitiveCol)))))
 }
-baselineData <- list()
-reducedData <- data
-while (length(corrs) > 0) {
+baselineAttrs <- list()
+newAttrs <- rep(TRUE, length(attributes))
+for (i in 1:(length(corrs) - 1)) {
 	maxCorr <- 0
 	maxAttr <- NULL
+	maxJ <- NULL
 	for (j in 1:length(corrs)) {
-		if (corrs[j]$corr > maxCorr) {
-			maxCorr <- corrs[j]$corr
-			maxAttr <- corrs[j]$attr
+		print(corrs[[j]])
+		if (corrs[[j]]$corr > maxCorr) {
+			maxCorr <- corrs[[j]]$corr
+			maxAttr <- corrs[[j]]$attr
+			maxJ <- j
 		}
 	}
-	lastData <- baselineData[length(baselineData)]
-	reducedData <- lastData[,1:maxAttr]
-	baselineData <- append(baselineData, newData)
-	lastData <- reducedData
+	newAttrs[maxAttr] <- FALSE
+	corrs <- corrs[-maxJ]
+	baselineAttrs <- append(baselineAttrs, list(newAttrs))
 }
 # End creating baseline datasets
+print(paste("Baseline attrs: ", baselineAttrs))
 
 chunkSize <- ceiling(nrow(data) / 10)
 meanAcc <- 0
