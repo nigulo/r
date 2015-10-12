@@ -205,14 +205,39 @@ predict <- function(x, tree) {
     }
 }
 
+# Creating baseline datasets with the most correlated attributes removed
+corrs <- c()
+for (i in 1:ncol(data)) {
+	if (i == sensitiveAttr || i == classAttr) {
+		next;
+	}
+	corrs <- c(corrs, list(attr=i, corr=abs(correlation(data[,i], data[,sensitiveAttr]))))
+}
+baselineData <- list()
+reducedData <- data
+while (length(corrs) > 0) {
+	maxCorr <- 0
+	maxAttr <- NULL
+	for (j in 1:length(corrs)) {
+		if (corrs[j]$corr > maxCorr) {
+			maxCorr <- corrs[j]$corr
+			maxAttr <- corrs[j]$attr
+		}
+	}
+	lastData <- baselineData[length(baselineData)]
+	reducedData <- lastData[,1:maxAttr]
+	baselineData <- append(baselineData, newData)
+	lastData <- reducedData
+}
+# End creating baseline datasets
+
 chunkSize <- ceiling(nrow(data) / 10)
 meanAcc <- 0
 meanDisc1 <- 0
 meanDisc2 <- 0
-meanAccRelab <- 0
-meanDisc1Relab <- 0
-meanDisc2Relab <- 0
-dDisc = 0.1
+relabMeanAccs <- NULL
+relabMeanDiscs1Relab <- NULL
+relabMeanDiscs2Relab <- NULL
 for (i in 0:9) { # 10-fold cross validation
     print(paste("Building tree", i + 1))
     validation <- data[(i*chunkSize + 1):(min((i+1)*chunkSize,nrow(data))),] # 10% of data for validation
@@ -227,19 +252,13 @@ for (i in 0:9) { # 10-fold cross validation
     numSensitive1 <- nrow(train[train[,sensitiveAttr] == unlist(sensitiveAttrVal1),])
     numSensitive2 <- nrow(train) -  numSensitive1
     tree <- generateTree(train, numSensitive1, numSensitive2, "1")
-    print("Relabeling tree")
-    treeRelab <- relabel(tree, dDisc)
     acc <- 0
     disc1 <- 0
     disc2 <- 0
-    accRelab <- 0
-    disc1Relab <- 0
-    disc2Relab <- 0
     print(paste("Validating tree", i + 1))
     for (j in 1:nrow(validation)) {
         x <- validation[j,]
         class <- predict(x, tree)
-        classRelab <- predict(x, treeRelab)
         #print(sprintf("Prediction: %s, true label: %s", format(label), format(x[classAttr])))
         if (class == unlist(x[classAttr])) {
             acc <- acc + 1
@@ -251,36 +270,69 @@ for (i in 0:9) { # 10-fold cross validation
                 disc2 <- disc2 + 1
             }
         }
-		#print(paste("classRelab:", classRelab))
-        if (classRelab == unlist(x[classAttr])) {
-            accRelab <- accRelab + 1
-        }
-        if (classRelab == classLabel1) {
-            if (unlist(x[sensitiveAttr]) == sensitiveAttrVal1) {
-                disc1Relab <- disc1Relab + 1
-            } else {
-                disc2Relab <- disc2Relab + 1
-            }
-        }
     }
-    numSensitive1 <- nrow(validation[validation[,sensitiveAttr] == sensitiveAttrVal1,])
-    numSensitive2 <- nrow(validation) -  numSensitive1
-    print(paste("Accuracy:", acc / nrow(validation)))
-    print(paste("Accuracy after relabeling:", accRelab / nrow(validation)))
-    print(paste("Discrimination:", disc1 / numSensitive1 - disc2 / numSensitive2))
-    print(paste("Discrimination after relabeling:", disc1Relab / numSensitive1 - disc2Relab / numSensitive2))
+	numSensitive1 <- nrow(validation[validation[,sensitiveAttr] == sensitiveAttrVal1,])
+	numSensitive2 <- nrow(validation) -  numSensitive1
+	disc <- disc1 / numSensitive1 - disc2 / numSensitive2
+	print(paste("Accuracy:", acc / nrow(validation)))
+	print(paste("Discrimination:", disc))
+	dDiscs <- seq(abs(disc) / 10, abs(disc) - abs(disc) / 10, by = abs(disc) / 10)
+	#if (is.null(meanDDiscs)) {
+	#	meanDDiscs <- dDiscs
+	#} else {
+	#	meanDDiscs <- meanDDiscs + dDiscs
+	#}
+	relabAccs <- c()
+	relabDiscs1 <- c()
+	relabDiscs2 <- c()
+	for (dDisc in dDiscs) {
+		print(paste("Relabeling tree with dDisc", dDisc))
+		treeRelab <- relabel(tree, dDisc)
+		accRelab <- 0
+		disc1Relab <- 0
+		disc2Relab <- 0
+		print(paste("Validating relabeled tree", i + 1))
+		for (j in 1:nrow(validation)) {
+			x <- validation[j,]
+			classRelab <- predict(x, treeRelab)
+			if (classRelab == unlist(x[classAttr])) {
+				accRelab <- accRelab + 1
+			}
+			if (classRelab == classLabel1) {
+				if (unlist(x[sensitiveAttr]) == sensitiveAttrVal1) {
+					disc1Relab <- disc1Relab + 1
+				} else {
+					disc2Relab <- disc2Relab + 1
+				}
+			}
+		}
+		relabAccs <- c(relabAccs, accRelab)
+		relabDiscs1 <- c(relabDiscs1, disc1Relab)
+		relabDiscs2 <- c(relabDiscs2, disc2Relab)
+		
+	}
+		
+	#print(paste("Accuracy after relabeling:", accRelab / nrow(validation)))
+	#print(paste("Discrimination after relabeling:", disc1Relab / numSensitive1 - disc2Relab / numSensitive2))
     meanAcc <- meanAcc + acc
     meanDisc1 <- meanDisc1 + disc1
     meanDisc2 <- meanDisc2 + disc2
-    meanAccRelab <- meanAccRelab + accRelab
-    meanDisc1Relab <- meanDisc1Relab + disc1Relab
-    meanDisc2Relab <- meanDisc2Relab + disc2Relab
+	if (is.null(relabMeanAccs)) {
+		relabMeanAccs <- relabAccs
+		relabMeanDiscs1 <- relabDiscs1
+		relabMeanDiscs2 <- relabDiscs2
+	} else {
+		relabMeanAccs <- relabMeanAccs + relabAccs
+		relabMeanDiscs1 <- relabMeanDiscs1 + relabDiscs1
+		relabMeanDiscs2 <- relabMeanDiscs2 + relabDiscs2
+	}
 }
 numSensitive1 <- nrow(data[data[,sensitiveAttr] == unlist(sensitiveAttrVal1),])
 numSensitive2 <- nrow(data) -  numSensitive1
 print(paste("10-Fold cross validation accuracy:", meanAcc / nrow(data)))
-print(paste("10-Fold cross validation accuracy after relabeling:", meanAccRelab / nrow(data)))
 print(paste("10-Fold cross validation discrimination:", meanDisc1 / numSensitive1 - meanDisc2 / numSensitive2))
-print(paste("10-Fold cross validation discrimination after relabeling:", meanDisc1Relab / numSensitive1 - meanDisc2Relab / numSensitive2))
-
-
+relabMeanAccs <- relabMeanAccs / nrow(data)
+relabMeanDiscs <- relabMeanDiscs1 / numSensitive1 - relabMeanDiscs2 / numSensitive2
+print(paste("10-Fold cross validation accuracy after relabeling:", relabMeanAccs))
+print(paste("10-Fold cross validation discrimination after relabeling:", relabMeanDiscs))
+plot(relabMeanDiscs, relabMeanAccs)
