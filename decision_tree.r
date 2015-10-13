@@ -19,6 +19,8 @@ classLabel2 <- unlist(attrVals[[classAttr]][2])
 sensitiveAttr <- 10
 sensitiveAttrVal1 <- unlist(attrVals[[sensitiveAttr]][1])
 
+splitMode <- "IGC" # Allowed values IGC, IGC_MINUS_IGS, IGC_DIV_IGS, IGC_PLUS_IGS
+
 nodeEntropy <- function(x, level) {
     entropy <- 0
     len <- nrow(x)
@@ -32,7 +34,8 @@ nodeEntropy <- function(x, level) {
     return (entropy)
 }
 
-splitEntropy <- function(subsets, level) {
+# Calculates split entropy w.r.t given attribute (usually class or sensitive attribute)
+splitEntropy <- function(subsets, attr, level) {
     entropy <- 0
     len <- 0
     for (subset in subsets) {
@@ -41,8 +44,8 @@ splitEntropy <- function(subsets, level) {
             next;
         }
         subEntropy <- 0
-        for (classAttrVal in attrVals[[classAttr]]) {
-            p <- nrow(subset[subset[,classAttr]==classAttrVal,]) / subsetLen
+        for (attrVal in attrVals[[attr]]) {
+            p <- nrow(subset[subset[,attr]==attrVal,]) / subsetLen
             if (p > 0) { # assuming 0 log 0 = 0
                 subEntropy <- subEntropy + p * log2(p)
             }
@@ -75,7 +78,7 @@ split <- function(x, allowedAttrs, level) {
     minEnt <- NULL
     bestSplit <- NULL
     bestSplitAttr <- NULL
-    for (attrIndex in 1:(ncol(x) - 1)) {
+    for (attrIndex in 1:ncol(x)) {
         if (attrIndex == classAttr || attrIndex == sensitiveAttr || !allowedAttrs[attrIndex]) {
             next # skip class attribute and sensitive attribute
         }
@@ -99,8 +102,20 @@ split <- function(x, allowedAttrs, level) {
             subsets <- append(subsets, list(subset1))
             subsets <- append(subsets, list(subset2))
         }
-        e <- splitEntropy(subsets, level)
-        if (is.null(minEnt) || e < minEnt) {
+        e <- splitEntropy(subsets, classAttr, level)
+		switch (splitMode,
+			IGC = {},
+			IGC_MINUS_IGS = {
+				e <- e - splitEntropy(subsets, sensitiveAttr, level)
+			},
+			IGC_DIV_IGS = {
+				e <- e / splitEntropy(subsets, sensitiveAttr, level)
+			},
+			IGC_PLUS_IGS = {
+				e <- e + splitEntropy(subsets, sensitiveAttr, level)
+			}
+		)
+		if (is.null(minEnt) || e < minEnt) {
             minEnt <- e
             bestSplit <- subsets
             bestSplitAttr <- attrIndex
