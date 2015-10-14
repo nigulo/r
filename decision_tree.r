@@ -1,26 +1,46 @@
+###################################################################
+# Decision tree construction with leaf relabeling
+# Class and sensitive attributes are assumed to be binary
+###################################################################
 library(class)
-#library(stringi)
 
+# attribute names
 attributes <- c("age", "workclass", "fnlwgt", "education", "education-num", "marital-status", "occupation", "relationship", "race", "sex", "capital-gain", "capital-loss", "hours-per-week", "native-country")
-attrTypes <- c(0, 1, 0, 1, 0, 1, 1, 1, 1, 1, 0, 0, 0, 1) # 0 - continuous, 1 - discrete
+
+# attribute types (0 - continuous, 1 - discrete)
+attrTypes <- c(0, 1, 0, 1, 0, 1, 1, 1, 1, 1, 0, 0, 0, 1)
+
+# Census Income Data
 data <- read.csv('data/adult.data', header=FALSE, strip.white = TRUE);
 
-#data <- data[data[,] != '?',]
+# domains of attribute values
 attrVals <- list()
 for (col in 1:ncol(data)) {
     attrVals <- append(attrVals, list(as.list(unique(data[,col]))))
 }
 
+# tree construction stop criterions
 minLeafSize <- 1000
 minEntropy <- 0.001
+
+# index of class attribute
 classAttr <- 15
-classLabel1 <- unlist(attrVals[[classAttr]][1])
-classLabel2 <- unlist(attrVals[[classAttr]][2])
+classLabel1 <- unlist(attrVals[[classAttr]][1]) # class label 1
+classLabel2 <- unlist(attrVals[[classAttr]][2]) # class label 2
+
+# index of sensitive attribute
 sensitiveAttr <- 10
-sensitiveAttrVal1 <- unlist(attrVals[[sensitiveAttr]][1])
+sensitiveAttrVal1 <- unlist(attrVals[[sensitiveAttr]][1]) # 
 
 splitMode <- "IGC" # Allowed values IGC, IGC_MINUS_IGS, IGC_DIV_IGS, IGC_PLUS_IGS
 
+
+###################################################################
+# Functions for decision tree building
+###################################################################
+
+# Calculates entropy of the a dataset x constituing the given node.
+# level - for logging purposes only
 nodeEntropy <- function(x, level) {
     entropy <- 0
     len <- nrow(x)
@@ -34,7 +54,8 @@ nodeEntropy <- function(x, level) {
     return (entropy)
 }
 
-# Calculates split entropy w.r.t given attribute (usually class or sensitive attribute)
+# Calculates split entropy over the set of subnodes w.r.t given attribute (usually class or sensitive attribute).
+# level - for logging purposes only
 splitEntropy <- function(subsets, attr, level) {
     entropy <- 0
     len <- 0
@@ -58,6 +79,7 @@ splitEntropy <- function(subsets, attr, level) {
     return (entropy)
 }
 
+# Given a data sample x and node, returns the index of subnode to which the x falls into
 splitFunc <- function(x, node) {
     attrIndex <- node$attr
     if (attrTypes[attrIndex] == 1) { # attribute is discrete
@@ -74,6 +96,11 @@ splitFunc <- function(x, node) {
     }
 }
 
+# Splits dataset constituting the given node into subsets
+# allowedAttrs - list of attributes which are allowed to be used in splitting.
+# This is only needed for the sake of baseline trees with omitted attributes.
+# Class and sensitive attribute are automatically forbidden.
+# level - for logging purposes only
 split <- function(x, allowedAttrs, level) {
     minEnt <- NULL
     bestSplit <- NULL
@@ -126,6 +153,12 @@ split <- function(x, allowedAttrs, level) {
     return (list(attr=bestSplitAttr, splitParams=bestSplitParams, subnodes=bestSplit))
 }
 
+# Creates a leaf node for subset x.
+# totalNumSensitive1 and totalNumSensitive2 - total number of 
+# samples with sensitive attribute values 1 and 2 respectively. 
+# These values are used while calculating potential change in discrimination
+# after relabeling.
+# level - for logging purposes only
 createLeaf <- function(x, totalNumSensitive1, totalNumSensitive2, level) {
     maxCount <- NULL
     classLabel <- NULL
@@ -150,6 +183,10 @@ createLeaf <- function(x, totalNumSensitive1, totalNumSensitive2, level) {
     return (list(class=classLabel, dAcc=deltaAcc, dDisc=deltaDisc))
 }
 
+# Constructs a tree from dataset x.
+# totalNumSensitive1 and totalNumSensitive2 - total number of 
+# samples with sensitive attribute values 1 and 2 respectively (passed to createLeaf).
+# level - for logging purposes only
 generateTree <- function(x, allowedAttrs, totalNumSensitive1, totalNumSensitive2, level) {
     if (nrow(x) <= minLeafSize || nodeEntropy(x, level) < minEntropy) {
         return (createLeaf(x, totalNumSensitive1, totalNumSensitive2, level))
@@ -165,7 +202,23 @@ generateTree <- function(x, allowedAttrs, totalNumSensitive1, totalNumSensitive2
     }
 }
 
-# Relabel one random leaf in tree which has dDisc negative
+# Predicts the class label for new data sample x
+predict <- function(x, tree) {
+	if (is.null(tree$attr)) { # leaf node
+		return (tree$class)
+	} else {
+		path <- splitFunc(x, tree)
+		#print(sprintf("Using attribute %d and path %d", tree$attr, path))
+		return (predict(x, tree$subnodes[[path]]))
+	}
+}
+
+###################################################################
+# Functions for leaf relabeling
+###################################################################
+
+# Relabels one random leaf in a tree which has 
+# negative change in discrimination
 relabelLeaf <- function(tree) {
     if (is.null(tree$attr)) { # leaf node
         if (tree$dDisc < 0) {
@@ -192,6 +245,10 @@ relabelLeaf <- function(tree) {
     }
 }
 
+# Relabels leaves in a tree until required decrease in
+# discrimination is achieved.
+# reqDDisc - required change in discrimination.
+# initDDisc - change in discrimination of the tree after previous relabelings.
 # We use an approach similar to Monte-Carlo method
 # and just generate random new trees with relabeled leaves
 # and discrimination drop more than specified value
@@ -222,17 +279,11 @@ relabel <- function(tree, reqDDisc, initDDisc) {
     return (list(tree=newTree, dDisc=newDDisc))
 }
 
-predict <- function(x, tree) {
-    if (is.null(tree$attr)) { # leaf node
-        return (tree$class)
-    } else {
-        path <- splitFunc(x, tree)
-        #print(sprintf("Using attribute %d and path %d", tree$attr, path))
-        return (predict(x, tree$subnodes[[path]]))
-    }
-}
 
-##########################################
+###################################################################
+# Main part of the program
+###################################################################
+
 # Creating baseline datasets with the most 
 # correlated attributes removed
 corrs <- c()
@@ -248,6 +299,7 @@ for (i in 1:ncol(data)) {
 	corrs <- c(corrs, list(list(attr=i, corr=abs(cor(x, sensitiveCol)))))
 }
 newAttrs <- rep(TRUE, length(attributes))
+# Allowed attributes in baseline trees
 baselineAttrs <- list()
 baselineAttrs <- append(baselineAttrs, list(newAttrs))
 for (i in 1:min(9, (length(corrs) - 1))) {
@@ -268,18 +320,23 @@ for (i in 1:min(9, (length(corrs) - 1))) {
 }
 # End creating baseline datasets
 print(paste("Baseline attrs: ", baselineAttrs))
-##########################################
 
-chunkSize <- ceiling(nrow(data) / 10)
+# size of of one validation set
+chunkSize <- ceiling(nrow(data) / 10) 
+
+# Accuracies and discriminations for 10-fold cross validation
+# for baseline trees
 baselineMeanAccs <- NULL
 baselineMeanDiscs1 <- NULL
 baselineMeanDiscs2 <- NULL
+# and for relabeled trees
 relabMeanAccs <- NULL
 relabMeanDiscs1 <- NULL
 relabMeanDiscs2 <- NULL
 for (i in 0:9) { # 10-fold cross validation
     print(paste("Building tree", i + 1, "of", 10))
-    validation <- data[(i*chunkSize + 1):(min((i+1)*chunkSize,nrow(data))),] # 10% of data for validation
+	# 10% of data for validation
+    validation <- data[(i*chunkSize + 1):(min((i+1)*chunkSize,nrow(data))),] 
     ranges <- c()
     if (i > 0) {
         ranges <- c(ranges, c(1:(i*chunkSize)))
@@ -287,12 +344,15 @@ for (i in 0:9) { # 10-fold cross validation
     if (i < 9) {
         ranges <- c(ranges, c(((i+1)*chunkSize + 1):nrow(data)))
     }
-    train <- data[ranges,] # 90% of data for training
+	# 90% of data for training
+    train <- data[ranges,] 
     numSensitive1 <- nrow(train[train[,sensitiveAttr] == unlist(sensitiveAttrVal1),])
     numSensitive2 <- nrow(train) -  numSensitive1
 	##################################
-	# Baseline decision trees
-	trees <- c()
+	# Building baseline decision trees
+	##################################
+	# baseline trees, 1st element is an original tree built from the dataset with all attributes enabled
+	trees <- c() 
 	j <- 1
 	for (allowedAttrs in baselineAttrs) {
 		print(paste("    Baseline tree", j, "of", length(baselineAttrs)))
@@ -330,19 +390,19 @@ for (i in 0:9) { # 10-fold cross validation
 	}
 	numSensitive1 <- nrow(validation[validation[,sensitiveAttr] == sensitiveAttrVal1,])
 	numSensitive2 <- nrow(validation) -  numSensitive1
-	# Accuracy and discrimination of the tree built using all the attributes
-	#acc <- baselineAccs[1]
+	# Discrimination of the tree built using all the attributes
 	disc <- baselineDiscs1[1] / numSensitive1 - baselineDiscs2[1] / numSensitive2
-	#print(paste("Accuracy:", acc / nrow(validation)))
-	#print(paste("Discrimination:", disc))
 	##################################
 	# Tree relabeling
+	##################################
+	# required changes in discriminations up to the discrimination of an original tree
 	reqDDiscs <- seq(abs(disc) / 10, abs(disc) - abs(disc) / 10, by = abs(disc) / 10)
 	relabAccs <- c()
 	relabDiscs1 <- c()
 	relabDiscs2 <- c()
 	dDisc <- 0
-	treeRelab <- trees[[1]] # baseline tree built using all attributes
+	# tree with relabeled leaves (initially set to original tree built using all attributes)
+	treeRelab <- trees[[1]]
 	for (reqDDisc in reqDDiscs) {
 		# Building relabeled tree using given decrease in discrimination
 		print(paste("    Relabeling tree with dDisc", reqDDisc))
@@ -371,9 +431,7 @@ for (i in 0:9) { # 10-fold cross validation
 		relabDiscs1 <- c(relabDiscs1, disc1Relab)
 		relabDiscs2 <- c(relabDiscs2, disc2Relab)
 	}
-		
-	#print(paste("Accuracy after relabeling:", accRelab / nrow(validation)))
-	#print(paste("Discrimination after relabeling:", disc1Relab / numSensitive1 - disc2Relab / numSensitive2))
+	# update average accuracies and discriminations of baseline trees
 	if (is.null(baselineMeanAccs)) {
 		baselineMeanAccs <- baselineAccs
 		baselineMeanDiscs1 <- baselineDiscs1
@@ -383,9 +441,7 @@ for (i in 0:9) { # 10-fold cross validation
 		baselineMeanDiscs1 <- baselineMeanDiscs1 + baselineDiscs1
 		baselineMeanDiscs2 <- baselineMeanDiscs2 + baselineDiscs2
 	}
-	#meanAcc <- meanAcc + acc
-    #meanDisc1 <- meanDisc1 + disc1
-    #meanDisc2 <- meanDisc2 + disc2
+	# update average accuracies and discriminations of relabeled trees
 	if (is.null(relabMeanAccs)) {
 		relabMeanAccs <- relabAccs
 		relabMeanDiscs1 <- relabDiscs1
